@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Instagram Followers Comparator</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; max-width: 900px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; flex: 1; min-width: 280px; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; }
+    input[type="file"] { width: 100%; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button:hover { background: #f6f6f6; }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    pre { background: #0b1020; color: #e7e7e7; padding: 12px; border-radius: 12px; overflow: auto; max-height: 340px; }
+    .muted { color: #666; font-size: 14px; }
+    .counts { margin: 10px 0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Instagram Followers Comparator</h1>
+  <p class="muted">Uploads stay in your browser (no server). Supports Instagram export <code>.json</code> and <code>.html</code> formats.</p>
+  <h4>Caveat's</h4>
+  <p class="muted">Ensure that the files are both of the same type (both files are either html files or json files) </p>
+  <p class="muted">The files MUST BE unedited export files from meta's information export </p>
+  <p class="muted">Deleted or deactivated accounts may appear in output</p>
+  <div class="row">
+    <div class="card">
+      <label for="followersFile">Followers file (followers_1.json or followers_1.html)</label>
+      <input id="followersFile" type="file" accept=".json,.html" />
+    </div>
+    <div class="card">
+      <label for="followingFile">Following file (following.json or following.html)</label>
+      <input id="followingFile" type="file" accept=".json,.html" />
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="compareBtn">Compare</button>
+    <button id="downloadNotBackBtn" disabled>Download “Not following back”</button>
+    <button id="downloadYouDontBtn" disabled>Download “You don’t follow back”</button>
+  </div>
+
+  <div class="row" style="margin-top: 16px;">
+    <div class="card">
+      <h2>Not following you back</h2>
+      <div id="countsNotBack" class="counts"></div>
+      <pre id="notBackOut">(results appear here)</pre>
+    </div>
+    <div class="card">
+      <h2>You don’t follow back</h2>
+      <div id="countsYouDont" class="counts"></div>
+      <pre id="youDontOut">(results appear here)</pre>
+    </div>
+  </div>
+
+<script>
+  const followersInput = document.getElementById('followersFile');
+  const followingInput = document.getElementById('followingFile');
+  const compareBtn = document.getElementById('compareBtn');
+
+  const notBackOut = document.getElementById('notBackOut');
+  const youDontOut = document.getElementById('youDontOut');
+  const countsNotBack = document.getElementById('countsNotBack');
+  const countsYouDont = document.getElementById('countsYouDont');
+
+  const downloadNotBackBtn = document.getElementById('downloadNotBackBtn');
+  const downloadYouDontBtn = document.getElementById('downloadYouDontBtn');
+
+  let lastNotBack = [];
+  let lastYouDont = [];
+
+  function isHtmlFile(file) {
+    return file && file.name.toLowerCase().endsWith('.html');
+  }
+  function isJsonFile(file) {
+    return file && file.name.toLowerCase().endsWith('.json');
+  }
+
+  function normalizeUsername(u) {
+    return (u || '').trim().replace(/^@/, '').toLowerCase();
+  }
+
+  function uniqueSorted(arr) {
+    return Array.from(new Set(arr)).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  }
+
+  async function readFileText(file) {
+    return await file.text();
+  }
+
+  // -------- Extractors --------
+
+  function extractFollowersFromJson(text) {
+    // Instagram followers JSON: string_list_data entries contain { "value": "username", ... }
+    const matches = text.match(/"value"\s*:\s*"([^"]+)"/g) || [];
+    return matches.map(m => (m.match(/"value"\s*:\s*"([^"]+)"/) || [,''])[1]).map(normalizeUsername);
+  }
+
+  function extractFollowingFromJson(text) {
+    // Instagram following JSON: usernames often appear under "title": "username"
+    const matches = text.match(/"title"\s*:\s*"([^"]+)"/g) || [];
+    return matches.map(m => (m.match(/"title"\s*:\s*"([^"]+)"/) || [,''])[1]).map(normalizeUsername);
+  }
+
+  function extractFollowersFromHtml(text) {
+    // followers HTML: often includes profile links; get username from /username or anchor text
+    // Grab usernames from instagram.com/<username>
+    const re = /https?:\/\/www\.instagram\.com\/([^"\/?#\s]+)\/?/gi;
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) out.push(normalizeUsername(m[1]));
+    return out;
+  }
+
+  function extractFollowingFromHtml(text) {
+    // following HTML: usernames appear in <h2 ...>username</h2> in your format
+    const re = /<h2[^>]*>\s*([^<\s]+)\s*<\/h2>/gi;
+    const out = [];
+    let m;
+    while ((m = re.exec(text)) !== null) out.push(normalizeUsername(m[1]));
+    return out;
+  }
+
+  async function extractUsernames(file, kind) {
+    // kind: 'followers' or 'following'
+    const text = await readFileText(file);
+
+    if (isJsonFile(file)) {
+      return kind === 'followers'
+        ? extractFollowersFromJson(text)
+        : extractFollowingFromJson(text);
+    }
+    if (isHtmlFile(file)) {
+      return kind === 'followers'
+        ? extractFollowersFromHtml(text)
+        : extractFollowingFromHtml(text);
+    }
+    throw new Error("Unsupported file type. Use .json or .html");
+  }
+
+  function setDifference(a, b) {
+    // a \ b
+    const bSet = new Set(b);
+    return a.filter(x => !bSet.has(x));
+  }
+
+  function downloadText(filename, lines) {
+    const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  compareBtn.addEventListener('click', async () => {
+    const followersFile = followersInput.files[0];
+    const followingFile = followingInput.files[0];
+    if (!followersFile || !followingFile) {
+      alert("Please choose both files.");
+      return;
+    }
+
+    notBackOut.textContent = "Working...";
+    youDontOut.textContent = "Working...";
+    countsNotBack.textContent = "";
+    countsYouDont.textContent = "";
+    downloadNotBackBtn.disabled = true;
+    downloadYouDontBtn.disabled = true;
+
+    try {
+      const followersRaw = await extractUsernames(followersFile, 'followers');
+      const followingRaw = await extractUsernames(followingFile, 'following');
+
+      const followers = uniqueSorted(followersRaw);
+      const following = uniqueSorted(followingRaw);
+
+      // People you follow who don't follow you back:
+      lastNotBack = uniqueSorted(setDifference(following, followers));
+      // People who follow you that you don't follow back:
+      lastYouDont = uniqueSorted(setDifference(followers, following));
+
+      countsNotBack.textContent = `Count: ${lastNotBack.length}`;
+      countsYouDont.textContent = `Count: ${lastYouDont.length}`;
+
+      notBackOut.textContent = lastNotBack.join('\n') || "(none)";
+      youDontOut.textContent = lastYouDont.join('\n') || "(none)";
+
+      downloadNotBackBtn.disabled = false;
+      downloadYouDontBtn.disabled = false;
+    } catch (err) {
+      notBackOut.textContent = "";
+      youDontOut.textContent = "";
+      alert(err.message || String(err));
+    }
+  });
+
+  downloadNotBackBtn.addEventListener('click', () => {
+    downloadText('not_following_back.txt', lastNotBack);
+  });
+
+  downloadYouDontBtn.addEventListener('click', () => {
+    downloadText('you_dont_follow_back.txt', lastYouDont);
+  });
+</script>
+</body>
+</html>
